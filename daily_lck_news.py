@@ -2,6 +2,7 @@ import os
 import requests
 import google.generativeai as genai
 from datetime import datetime
+import traceback
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -13,55 +14,67 @@ def get_lck_news():
             
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 최신 정보를 위해 구글 검색 기능 사용 시도
-        # google_search_retrieval은 최신 SDK에서 지원하는 표준 도구 이름입니다.
+        # 1. 사용 가능한 모델 목록 직접 확인
+        print("사용 가능한 모델 목록을 확인합니다...")
+        all_models = []
         try:
-            model = genai.GenerativeModel(
-                model_name='gemini-1.5-flash',
-                tools=[{"google_search_retrieval": {}}]
-            )
-            
-            today = datetime.now().strftime("%Y년 %m월 %d일")
-            prompt = f"{today} 기준, LCK(League of Legends Champions Korea)의 가장 최신 뉴스 5가지를 구글 검색으로 찾아서 요약해줘. [제목 - 요약 - 출처] 형식으로 작성하고, 마지막에 '오늘의 LCK 소식 배달 완료!'라고 덧붙여줘. 한국어로 작성해."
-            
-            response = model.generate_content(prompt)
-            if response and response.text:
-                return response.text
-            else:
-                return "AI가 응답을 생성했지만 텍스트가 비어있습니다."
-                
-        except Exception as search_error:
-            print(f"검색 도구 사용 중 오류(일반 모델로 전환): {search_error}")
-            # 검색 도구 실패 시 일반 모델로 전환하여 시도
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(f"{datetime.now().strftime('%Y-%m-%d')} LCK 최신 뉴스를 알려줘.")
-            return response.text if response.text else "뉴스 요약 실패."
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    all_models.append(m.name)
+            print(f"발견된 모델: {all_models}")
+        except Exception as list_err:
+            print(f"모델 목록 수집 실패: {list_err}")
+            all_models = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
+
+        # 2. 우선 순위 모델 선정 (검색 기능 포함 모델 우선)
+        # 모델 이름에서 'models/' 접두사 처리
+        test_prompts = f"{datetime.now().strftime('%Y-%m-%d')} LCK 최신 뉴스 5개를 구글 검색으로 찾아서 요약해줘."
+        
+        for model_path in all_models:
+            try:
+                print(f"시도 중인 모델: {model_path}")
+                # 검색 기능을 포함하여 시도
+                model = genai.GenerativeModel(
+                    model_name=model_path,
+                    tools=[{"google_search_retrieval": {}}]
+                )
+                response = model.generate_content(test_prompts)
+                if response and response.text:
+                    return response.text
+            except Exception as e:
+                print(f"{model_path} 검색 기능 실패: {e}. 일반 모드로 재시도...")
+                try:
+                    # 검색 기능 없이 일반 모드로 재시도
+                    model = genai.GenerativeModel(model_name=model_path)
+                    response = model.generate_content(test_prompts)
+                    if response and response.text:
+                        return response.text
+                except Exception as e2:
+                    print(f"{model_path} 일반 모드도 실패: {e2}")
+                    continue
+        
+        return f"❌ 모든 가용 모델({all_models}) 호출 실패. \n마지막 오류: {traceback.format_exc()}"
 
     except Exception as e:
-        return f"전체 프로세스 중 치명적 오류 발생: {str(e)}"
+        return f"🔥 치명적 시스템 오류 발생: {str(e)}\n{traceback.format_exc()}"
 
 def send_to_discord(content):
     if not DISCORD_WEBHOOK_URL:
-        print("오류: 디스코드 웹훅 URL이 없습니다.")
         return
         
     try:
-        header = f"📡 **오늘의 LCK 소식 브리핑 ({datetime.now().strftime('%m/%d')})**\n\n"
+        header = f"📡 **LCK 뉴스 봇 가동 보고 ({datetime.now().strftime('%m/%d %H:%M')})**\n\n"
         full_message = header + content
         
-        # 디스코드 글자수 제한(2000자) 처리
         if len(full_message) > 2000:
             full_message = full_message[:1990] + "..."
             
-        payload = {"content": full_message}
-        res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
-        res.raise_for_status()
-        print("디스코드 전송 성공!")
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": full_message}, timeout=10)
     except Exception as e:
         print(f"디스코드 전송 실패: {e}")
 
 if __name__ == "__main__":
-    print("=== LCK 뉴스 수집기 가동 ===")
+    print("=== LCK 뉴스 봇 (슈퍼 로버스트 버전) 가동 ===")
     news = get_lck_news()
     send_to_discord(news)
     print("=== 작업 완료 ===")
