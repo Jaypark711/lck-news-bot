@@ -8,26 +8,23 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 def get_lck_news():
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # 시도할 모델 리스트 (가장 최신 명칭 포함)
-    models_to_try = [
-        'gemini-1.5-flash-latest', 
-        'gemini-1.5-flash', 
-        'gemini-1.5-pro', 
-        'gemini-pro'
-    ]
-    
-    last_error = ""
-
-    # 가용한 모델 목록 출력 (디버깅용)
-    print("사용 가능한 모델 리스트 확인 중...")
+    # 1. 사용 가능한 모델 목록 수집 (실제로 작동하는 모델 찾기)
+    available_models = []
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                print(f"Found: {m.name}")
-    except:
-        print("모델 리스트를 가져올 수 없습니다.")
+                # 'models/gemini-1.5-flash' 형식에서 'gemini-1.5-flash'만 추출
+                model_short_name = m.name.split('/')[-1]
+                available_models.append(model_short_name)
+        print(f"가용한 모델: {available_models}")
+    except Exception as e:
+        print(f"모델 목록 수집 실패: {e}")
+        available_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
 
-    for model_name in models_to_try:
+    last_error = ""
+
+    # 2. 가용한 모델들로 순차적 시도
+    for model_name in available_models:
         try:
             print(f"[{model_name}] 모델 시도 중...")
             model = genai.GenerativeModel(model_name)
@@ -43,19 +40,18 @@ def get_lck_news():
             print(f"[{model_name}] 실패: {last_error}")
             continue
             
-    return f"❌ 모든 모델 호출 실패. 마지막 에러: {last_error}"
+    return f"❌ 모든 모델 호출 실패. 가용했던 모델 리스트: {available_models}. 마지막 에러: {last_error}"
 
 def send_to_discord(content):
     if not content or "모든 모델 호출 실패" in content:
         payload = {"content": f"⚠️ LCK 봇 실행 실패 보고: \n{content}"}
     else:
-        # 요약 내용만 깔끔하게 전송
         payload = {"content": f"📡 **오늘의 LCK 소식 브리핑**\n\n{content}"}
     
     requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
 
 if __name__ == "__main__":
-    print("=== LCK 뉴스 수집 시작 ===")
+    print("=== LCK 뉴스 수집 시작 (v4) ===")
     news = get_lck_news()
     send_to_discord(news)
     print("=== 모든 작업 완료 ===")
